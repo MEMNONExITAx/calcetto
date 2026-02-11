@@ -6,7 +6,7 @@
   <title>Calcetto - Disponibilità</title>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy } 
+    import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -19,6 +19,7 @@
     const db = getFirestore(app);
     const availabilityRef = collection(db, "availability");
     const historyRef = collection(db, "history");
+    const playersRef = collection(db, "players");
 
     const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
 
@@ -26,6 +27,14 @@
       const name = document.getElementById("nameInput").value.trim();
       if (!name) return;
 
+      // Aggiungi giocatore se non esiste
+      const playerQuery = query(playersRef, where("name", "==", name));
+      const playerSnap = await getDocs(playerQuery);
+      if (playerSnap.empty) {
+        await addDoc(playersRef, { name: name, games: 0 });
+      }
+
+      // Aggiungi disponibilità se non già presente
       const q = query(availabilityRef, where("name", "==", name));
       const snapshot = await getDocs(q);
 
@@ -34,11 +43,7 @@
         return;
       }
 
-      await addDoc(availabilityRef, {
-        name: name,
-        timestamp: new Date()
-      });
-
+      await addDoc(availabilityRef, { name: name, timestamp: new Date() });
       document.getElementById("nameInput").value = "";
     }
 
@@ -51,41 +56,39 @@
       selectedDiv.innerHTML = "";
 
       const selectedNames = [];
-      docs.forEach(d => {
+      for (const d of docs) {
+        const name = d.data().name;
         const div = document.createElement("div");
         div.className = "player selected";
-        div.innerText = d.data().name;
+        div.innerText = name;
         selectedDiv.appendChild(div);
-        selectedNames.push(d.data().name);
-      });
+        selectedNames.push(name);
 
-      // Aggiungi a storico
-      await addDoc(historyRef, {
-        date: new Date(),
-        players: selectedNames
-      });
+        // Aggiorna counter partite giocatore
+        const playerQuery = query(playersRef, where("name", "==", name));
+        const playerSnap = await getDocs(playerQuery);
+        if (!playerSnap.empty) {
+          const playerDoc = playerSnap.docs[0];
+          await updateDoc(doc(db, "players", playerDoc.id), { games: playerDoc.data().games + 1 });
+        }
+      }
 
-      // Rimuovi tutti i documenti della disponibilità (reset totale)
+      // Aggiungi storico
+      await addDoc(historyRef, { date: new Date(), players: selectedNames });
+
+      // Rimuovi solo disponibilità correnti
       const allSnapshot = await getDocs(availabilityRef);
       for (const d of allSnapshot.docs) {
         await deleteDoc(doc(db, "availability", d.id));
       }
     }
 
-    window.resetAll = async function() {
-      if (!confirm("Cancellare tutte le disponibilità e convocate?")) return;
-      // Cancella disponibilità
+    window.resetAvailability = async function() {
+      if (!confirm("Cancellare tutte le disponibilità?")) return;
       const availSnapshot = await getDocs(availabilityRef);
       for (const d of availSnapshot.docs) {
         await deleteDoc(doc(db, "availability", d.id));
       }
-      // Cancella storico
-      const historySnapshot = await getDocs(historyRef);
-      for (const d of historySnapshot.docs) {
-        await deleteDoc(doc(db, "history", d.id));
-      }
-      document.getElementById("selectedList").innerHTML = "";
-      renderHistory([]);
     }
 
     function renderHistory(historyData) {
@@ -99,22 +102,34 @@
       });
     }
 
-    // Mostra disponibilità in tempo reale
-    onSnapshot(availabilityRef, (snapshot) => {
+    function renderPlayers(playersData) {
       const list = document.getElementById("availableList");
       list.innerHTML = "";
-      snapshot.forEach(d => {
+      playersData.forEach(p => {
         const div = document.createElement("div");
-        div.className = "player available";
-        div.innerText = d.data().name;
+        div.className = 'player available';
+        div.innerText = `${p.name} (${p.games})`;
         list.appendChild(div);
       });
+    }
+
+    // Disponibilità in tempo reale
+    onSnapshot(availabilityRef, (snapshot) => {
+      const availNames = snapshot.docs.map(d => d.data().name);
+      const playerData = availNames.map(name => ({ name })); // games aggiornati nel player collection
+      renderPlayers(playerData);
     });
 
-    // Mostra storico in tempo reale
+    // Storico in tempo reale
     onSnapshot(historyRef, (snapshot) => {
-      const historyData = snapshot.docs.map(d => ({ date: d.data().date, players: d.data().players }));
+      const historyData = snapshot.docs.map(d => d.data());
       renderHistory(historyData);
+    });
+
+    // Lista giocatori con counter partite
+    onSnapshot(playersRef, (snapshot) => {
+      const data = snapshot.docs.map(d => d.data());
+      renderPlayers(data);
     });
 
     window.onload = function() {
@@ -150,7 +165,7 @@
   <div class="box">
     <h3>🔐 Pannello Admin</h3>
     <button onclick="generateTeam()">Genera 10 Convocati</button>
-    <button onclick="resetAll()">Reset Totale</button>
+    <button onclick="resetAvailability()">Reset Disponibilità</button>
     <div id="selectedList" style="margin-top:15px;"></div>
     <h3>Storico Convocati</h3>
     <div id="historyList"></div>
