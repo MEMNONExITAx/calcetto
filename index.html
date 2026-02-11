@@ -1,9 +1,32 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calcetto - Disponibilità</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f4f4f4; text-align:center; padding:20px; color: #333; }
+  h1 { color: #2c3e50; }
+  .box { background:white; padding:20px; border-radius:10px; margin-bottom:20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 600px; margin-left: auto; margin-right: auto; }
+  .player { padding:10px; margin:5px; border-radius:8px; border:1px solid #ddd; display:flex; justify-content: space-between; align-items: center; background: #fff; }
+  .available { border-left: 5px solid #4CAF50; }
+  .selected { background:#e3f2fd; border-left: 5px solid #2196F3; font-weight: bold; }
+  .convocato { background:#d4edda; border-left:5px solid #28a745; font-weight:bold; }
+  input { padding: 10px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
+  button { padding:10px 15px; margin-top:10px; cursor: pointer; border: none; border-radius: 5px; background-color: #2c3e50; color: white; font-weight: bold; }
+  button:hover { background-color: #34495e; }
+  button.danger { background-color: #e74c3c; }
+  .badge { background: #eee; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; color: #555; }
+  .history-item { text-align: left; border-bottom: 1px solid #eee; padding: 10px 0; font-size: 0.9em; }
+  .history-date { font-weight: bold; color: #2196F3; display: block; margin-bottom: 4px;}
+  .history-names { color: #555; font-style: italic; }
+</style>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp, writeBatch, limit } 
 from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIG FIREBASE ---
+// --- CONFIGURAZIONE FIREBASE ---
 const firebaseConfig = {
   apiKey: "INSERISCI_API_KEY",
   authDomain: "INSERISCI_AUTH_DOMAIN",
@@ -12,7 +35,6 @@ const firebaseConfig = {
   messagingSenderId: "INSERISCI_MESSAGING_SENDER_ID",
   appId: "INSERISCI_APP_ID"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const availabilityRef = collection(db, "availability");
@@ -34,16 +56,16 @@ window.setAvailability = async function() {
   try {
     const playerQuery = query(playersRef, where("name", "==", name));
     const playerSnap = await getDocs(playerQuery);
-    if (playerSnap.empty) await addDoc(playersRef, { name: name, games: 0 });
+    if (playerSnap.empty) await addDoc(playersRef, { name, games: 0 });
 
     const availQuery = query(availabilityRef, where("name", "==", name));
     const availSnap = await getDocs(availQuery);
     if (!availSnap.empty) return alert("Sei già in lista!");
 
-    await addDoc(availabilityRef, { name: name, timestamp: Timestamp.now() });
+    await addDoc(availabilityRef, { name, timestamp: Timestamp.now() });
     nameInput.value = "";
     nameInput.focus();
-  } catch (e) { console.error(e); }
+  } catch(e) { console.error(e); }
 }
 
 // --- GENERA SQUADRA TOP 10 ---
@@ -51,22 +73,17 @@ window.generateTeam = async function() {
   if (!confirm("Generare i convocati? La lista disponibilità verrà svuotata.")) return;
 
   try {
-    // Query che ordina per timestamp e limita a 10
-    const qTop10 = query(availabilityRef, orderBy("timestamp"), limit(10));
-    const topSnapshot = await getDocs(qTop10);
-
-    if (topSnapshot.empty) return alert("Nessuno in lista!");
+    const qTop10 = query(availabilityRef, orderBy("timestamp", "asc"), limit(10));
+    const topSnap = await getDocs(qTop10);
+    if (topSnap.empty) return alert("Nessuno in lista!");
 
     const batch = writeBatch(db);
     selectedNames = [];
 
-    topSnapshot.docs.forEach(d => {
+    for (const d of topSnap.docs) {
       const name = d.data().name;
       selectedNames.push(name);
-    });
 
-    // Incrementa contatore partite per ciascun convocato
-    for (const name of selectedNames) {
       const pQuery = query(playersRef, where("name", "==", name));
       const pSnap = await getDocs(pQuery);
       if (!pSnap.empty) {
@@ -82,15 +99,12 @@ window.generateTeam = async function() {
     await batch.commit();
 
     // Salva storico
-    await addDoc(historyRef, {
-      date: Timestamp.now(),
-      players: selectedNames
-    });
+    await addDoc(historyRef, { date: Timestamp.now(), players: selectedNames });
 
     alert("Squadra generata!");
-  } catch (e) {
-    console.error(e);
-    alert("Errore generazione squadra");
+  } catch(e) {
+    console.error("Errore generazione:", e);
+    alert("Errore generazione squadra. Controlla console.");
   }
 }
 
@@ -108,16 +122,25 @@ window.resetAvailability = async function() {
 function renderMainList() {
   const list = document.getElementById("availableList");
   list.innerHTML = currentAvailabilityList.length ? "" : "<p>In attesa di giocatori...</p>";
-  
+
   currentAvailabilityList
-    .sort((a,b) => a.timestamp.toMillis() - b.timestamp.toMillis())
-    .forEach((p, i) => {
+    .sort((a,b) => {
+      const t1 = a.timestamp?.toMillis() || 0;
+      const t2 = b.timestamp?.toMillis() || 0;
+      return t1 - t2;
+    })
+    .forEach((p,i) => {
       const div = document.createElement("div");
       div.className = 'player available';
-      if (selectedNames.includes(p.name)) div.classList.add("selected");
-      div.style.borderLeftColor = i < 10 ? "#4CAF50" : "#FF9800";
       const count = localPlayerStats[p.name] || 0;
       div.innerHTML = `<strong>${i+1}. ${p.name}</strong> <span class="badge">Partite: ${count}</span>`;
+
+      // Evidenzia convocati
+      if (selectedNames.includes(p.name)) {
+        div.classList.add("convocato");
+        div.innerHTML = `✅ ${div.innerHTML}`;
+      }
+
       list.appendChild(div);
     });
 }
@@ -126,11 +149,11 @@ function renderHistory(data) {
   const list = document.getElementById("historyList");
   list.innerHTML = "";
   data
-    .sort((a,b) => b.date.toMillis() - a.date.toMillis())
+    .sort((a,b) => (b.date?.toMillis() || 0) - (a.date?.toMillis() || 0))
     .forEach(h => {
       const div = document.createElement("div");
       div.className = "history-item";
-      const d = h.date.toDate().toLocaleString('it-IT');
+      const d = h.date?.toDate ? h.date.toDate().toLocaleString('it-IT') : "Data N/A";
       div.innerHTML = `<span class="history-date">📅 ${d}</span><span class="history-names">${h.players.join(", ")}</span>`;
       list.appendChild(div);
     });
@@ -141,13 +164,41 @@ onSnapshot(playersRef, s => {
   s.forEach(d => localPlayerStats[d.data().name] = d.data().games);
   renderMainList();
 });
-
 onSnapshot(availabilityRef, s => {
   currentAvailabilityList = s.docs.map(d => d.data());
   renderMainList();
 });
-
 onSnapshot(historyRef, s => renderHistory(s.docs.map(d => d.data())));
 
-window.onload = () => { if (isAdmin) document.getElementById("adminPanel").style.display = "block"; }
+window.onload = () => {
+  if (isAdmin) document.getElementById("adminPanel").style.display = "block";
+}
 </script>
+</head>
+<body>
+
+<h1>⚽ Disponibilità Calcetto</h1>
+
+<div class="box">
+  <input type="text" id="nameInput" placeholder="Nome (es. MARIO)">
+  <button onclick="setAvailability()">🙋 Segnati</button>
+</div>
+
+<div class="box">
+  <h3>Lista Attuale</h3>
+  <div id="availableList"></div>
+</div>
+
+<div id="adminPanel" style="display:none; border: 2px dashed #ccc;">
+  <div class="box" style="background: #fff8e1;">
+    <h3>🔐 Pannello Admin</h3>
+    <button onclick="generateTeam()">🔥 Genera Squadra (Top 10)</button>
+    <button onclick="resetAvailability()" class="danger">🗑️ Svuota Lista</button>
+    <hr>
+    <h3>Storico Ultime Partite</h3>
+    <div id="historyList"></div>
+  </div>
+</div>
+
+</body>
+</html>
