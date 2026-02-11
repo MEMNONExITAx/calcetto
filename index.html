@@ -1,211 +1,152 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Calcetto - Disponibilità</title>
-  <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f4f4f4; text-align:center; padding:20px; color: #333; }
-    h1 { color: #2c3e50; }
-    .box { background:white; padding:20px; border-radius:10px; margin-bottom:20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 600px; margin-left: auto; margin-right: auto; }
-    .player { padding:10px; margin:5px; border-radius:8px; border:1px solid #ddd; display:flex; justify-content: space-between; align-items: center; background: #fff; }
-    .available { border-left: 5px solid #4CAF50; }
-    .selected { background:#e3f2fd; border-left: 5px solid #2196F3; font-weight: bold; }
-    input { padding: 10px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
-    button { padding:10px 15px; margin-top:10px; cursor: pointer; border: none; border-radius: 5px; background-color: #2c3e50; color: white; font-weight: bold; }
-    button:hover { background-color: #34495e; }
-    button.danger { background-color: #e74c3c; }
-    .badge { background: #eee; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; color: #555; }
-    .history-item { text-align: left; border-bottom: 1px solid #eee; padding: 10px 0; font-size: 0.9em; }
-    .history-date { font-weight: bold; color: #2196F3; display: block; margin-bottom: 4px;}
-    .history-names { color: #555; font-style: italic; }
-  </style>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp, writeBatch } 
+from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp, writeBatch } 
-    from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+// --- CONFIGURAZIONE FIREBASE ---
+const firebaseConfig = {
+  apiKey: "INSERISCI_API_KEY",
+  authDomain: "INSERISCI_AUTH_DOMAIN",
+  projectId: "INSERISCI_PROJECT_ID",
+  storageBucket: "INSERISCI_STORAGE_BUCKET",
+  messagingSenderId: "INSERISCI_MESSAGING_SENDER_ID",
+  appId: "INSERISCI_APP_ID"
+};
 
-    // --- CONFIGURAZIONE FIREBASE ---
-    const firebaseConfig = {
-      apiKey: "INSERISCI_API_KEY",
-      authDomain: "INSERISCI_AUTH_DOMAIN",
-      projectId: "INSERISCI_PROJECT_ID",
-      storageBucket: "INSERISCI_STORAGE_BUCKET",
-      messagingSenderId: "INSERISCI_MESSAGING_SENDER_ID",
-      appId: "INSERISCI_APP_ID"
-    };
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const availabilityRef = collection(db, "availability");
+const historyRef = collection(db, "history");
+const playersRef = collection(db, "players");
 
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-    const availabilityRef = collection(db, "availability");
-    const historyRef = collection(db, "history");
-    const playersRef = collection(db, "players");
+let localPlayerStats = {}; 
+let currentAvailabilityList = []; 
+let selectedNames = [];
 
-    let localPlayerStats = {}; 
-    let currentAvailabilityList = []; 
+const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
 
-    const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
+// --- AGGIUNGI DISPONIBILITÀ ---
+window.setAvailability = async function() {
+  const nameInput = document.getElementById("nameInput");
+  const name = nameInput.value.trim().toUpperCase();
+  if (!name) return alert("Inserisci un nome!");
 
-    // --- AGGIUNGI DISPONIBILITÀ ---
-    window.setAvailability = async function() {
-      const nameInput = document.getElementById("nameInput");
-      const name = nameInput.value.trim().toUpperCase();
-      if (!name) return alert("Inserisci un nome!");
+  try {
+    const playerQuery = query(playersRef, where("name", "==", name));
+    const playerSnap = await getDocs(playerQuery);
+    if (playerSnap.empty) { await addDoc(playersRef, { name: name, games: 0 }); }
 
-      try {
-        const playerQuery = query(playersRef, where("name", "==", name));
-        const playerSnap = await getDocs(playerQuery);
-        if (playerSnap.empty) { await addDoc(playersRef, { name: name, games: 0 }); }
+    const availQuery = query(availabilityRef, where("name", "==", name));
+    const availSnap = await getDocs(availQuery);
+    if (!availSnap.empty) { alert("Sei già in lista!"); return; }
 
-        const availQuery = query(availabilityRef, where("name", "==", name));
-        const availSnap = await getDocs(availQuery);
-        if (!availSnap.empty) { alert("Sei già in lista!"); return; }
+    await addDoc(availabilityRef, { name: name, timestamp: Timestamp.now() });
+    nameInput.value = "";
+    nameInput.focus();
+  } catch (e) { console.error(e); }
+}
 
-        await addDoc(availabilityRef, { name: name, timestamp: Timestamp.now() });
-        nameInput.value = "";
-      } catch (e) { console.error(e); }
-    }
+// --- GENERA SQUADRA TOP 10 ---
+window.generateTeam = async function() {
+  if (!confirm("Generare i convocati? La lista disponibilità verrà svuotata.")) return;
 
-    // --- GENERA SQUADRA (VERSIONE BATCH - SICURA) ---
-    window.generateTeam = async function() {
-      if (!confirm("Generare i convocati? La lista disponibilità verrà svuotata.")) return;
+  try {
+    const q = query(availabilityRef, orderBy("timestamp", "asc"));
+    const snapshot = await getDocs(q);
+    
+    if (snapshot.empty) return alert("Nessuno in lista!");
 
-      try {
-        const q = query(availabilityRef, orderBy("timestamp", "asc"));
-        const snapshot = await getDocs(q);
-        
-        if (snapshot.empty) return alert("Nessuno in lista!");
+    const batch = writeBatch(db);
+    const allDocs = snapshot.docs;
+    const topDocs = allDocs.slice(0, 10); 
+    selectedNames = [];
 
-        const batch = writeBatch(db);
-        const allDocs = snapshot.docs;
-        const selectedDocs = allDocs.slice(0, 10); // Prendi i primi 10
-        const selectedNames = [];
+    // Aggiorna contatore partite dei convocati
+    for (const d of topDocs) {
+      const name = d.data().name;
+      selectedNames.push(name);
 
-        // 1. Prepariamo i dati dei convocati e il batch per i counter
-        for (const d of selectedDocs) {
-          const name = d.data().name;
-          selectedNames.push(name);
-
-          // Cerca il documento del giocatore per incrementare i games
-          const pQuery = query(playersRef, where("name", "==", name));
-          const pSnap = await getDocs(pQuery);
-          if (!pSnap.empty) {
-            const pDoc = pSnap.docs[0];
-            const newCount = (pDoc.data().games || 0) + 1;
-            batch.update(doc(db, "players", pDoc.id), { games: newCount });
-          }
-        }
-
-        // 2. Aggiungi al batch la cancellazione di TUTTA la lista disponibilità
-        // Questo risolve il problema del "sempre il primo della lista" perché pulisce tutto
-        allDocs.forEach((d) => {
-          batch.delete(doc(db, "availability", d.id));
-        });
-
-        // 3. Eseguiamo tutte le operazioni sul DB in un colpo solo
-        await batch.commit();
-
-        // 4. Salviamo lo storico (operazione separata dopo il successo del batch)
-        await addDoc(historyRef, {
-          date: Timestamp.now(),
-          players: selectedNames
-        });
-
-        // 5. Mostriamo a video i convocati
-        const selectedDiv = document.getElementById("selectedList");
-        selectedDiv.innerHTML = "<h4>✅ Convocati per questa partita:</h4>";
-        selectedNames.forEach(n => {
-          const d = document.createElement("div");
-          d.className = "player selected";
-          d.innerText = n;
-          selectedDiv.appendChild(d);
-        });
-
-        alert("Squadra generata e storico aggiornato!");
-      } catch (e) {
-        console.error("Errore generazione:", e);
-        alert("Errore durante la generazione. Controlla la console.");
+      const pQuery = query(playersRef, where("name", "==", name));
+      const pSnap = await getDocs(pQuery);
+      if (!pSnap.empty) {
+        const pDoc = pSnap.docs[0];
+        const newCount = (pDoc.data().games || 0) + 1;
+        batch.update(doc(db, "players", pDoc.id), { games: newCount });
       }
     }
 
-    window.resetAvailability = async function() {
-      if (!confirm("Vuoi svuotare la lista?")) return;
-      const snap = await getDocs(availabilityRef);
-      const batch = writeBatch(db);
-      snap.forEach(d => batch.delete(doc(db, "availability", d.id)));
-      await batch.commit();
-      document.getElementById("selectedList").innerHTML = "";
-    }
+    // Cancella tutta la disponibilità
+    allDocs.forEach(d => batch.delete(doc(db, "availability", d.id)));
+    await batch.commit();
 
-    // --- RENDERING LISTE ---
-    function renderMainList() {
-      const list = document.getElementById("availableList");
-      list.innerHTML = currentAvailabilityList.length ? "" : "<p>In attesa di giocatori...</p>";
-      
-      currentAvailabilityList.sort((a,b) => a.timestamp - b.timestamp).forEach((p, i) => {
-        const div = document.createElement("div");
-        div.className = 'player available';
-        div.style.borderLeftColor = i < 10 ? "#4CAF50" : "#FF9800";
-        const count = localPlayerStats[p.name] || 0;
-        div.innerHTML = `<strong>${i+1}. ${p.name}</strong> <span class="badge">Partite: ${count}</span>`;
-        list.appendChild(div);
-      });
-    }
+    // Salva lo storico
+    await addDoc(historyRef, { date: Timestamp.now(), players: selectedNames });
 
-    function renderHistory(data) {
-      const list = document.getElementById("historyList");
-      list.innerHTML = "";
-      data.sort((a,b) => b.date - a.date).forEach(h => {
-        const div = document.createElement("div");
-        div.className = "history-item";
-        const d = h.date?.toDate ? h.date.toDate().toLocaleString('it-IT') : "Data N/A";
-        div.innerHTML = `<span class="history-date">📅 ${d}</span><span class="history-names">${h.players.join(", ")}</span>`;
-        list.appendChild(div);
-      });
-    }
+    alert("Squadra generata e storico aggiornato!");
+  } catch (e) {
+    console.error("Errore generazione:", e);
+    alert("Errore durante la generazione. Controlla la console.");
+  }
+}
 
-    // --- SNAPSHOTS ---
-    onSnapshot(playersRef, s => {
-      s.forEach(d => localPlayerStats[d.data().name] = d.data().games);
-      renderMainList();
+// --- RESET LISTA ---
+window.resetAvailability = async function() {
+  if (!confirm("Vuoi svuotare la lista?")) return;
+  const snap = await getDocs(availabilityRef);
+  const batch = writeBatch(db);
+  snap.forEach(d => batch.delete(doc(db, "availability", d.id)));
+  await batch.commit();
+  selectedNames = [];
+}
+
+// --- RENDERING ---
+function renderMainList() {
+  const list = document.getElementById("availableList");
+  list.innerHTML = currentAvailabilityList.length ? "" : "<p>In attesa di giocatori...</p>";
+  
+  currentAvailabilityList
+    .sort((a,b) => a.timestamp.toMillis() - b.timestamp.toMillis())
+    .forEach((p, i) => {
+      const div = document.createElement("div");
+      div.className = 'player available';
+      div.style.borderLeftColor = i < 10 ? "#4CAF50" : "#FF9800";
+
+      // Evidenzia se convocato
+      if (selectedNames.includes(p.name)) div.classList.add("selected");
+
+      const count = localPlayerStats[p.name] || 0;
+      div.innerHTML = `<strong>${i+1}. ${p.name}</strong> <span class="badge">Partite: ${count}</span>`;
+      list.appendChild(div);
     });
+}
 
-    onSnapshot(availabilityRef, s => {
-      currentAvailabilityList = s.docs.map(d => d.data());
-      renderMainList();
+function renderHistory(data) {
+  const list = document.getElementById("historyList");
+  list.innerHTML = "";
+  data
+    .sort((a,b) => b.date.toMillis() - a.date.toMillis())
+    .forEach(h => {
+      const div = document.createElement("div");
+      div.className = "history-item";
+      const d = h.date?.toDate ? h.date.toDate().toLocaleString('it-IT') : "Data N/A";
+      div.innerHTML = `<span class="history-date">📅 ${d}</span><span class="history-names">${h.players.join(", ")}</span>`;
+      list.appendChild(div);
     });
+}
 
-    onSnapshot(historyRef, s => renderHistory(s.docs.map(d => d.data())));
+// --- SNAPSHOTS ---
+onSnapshot(playersRef, s => {
+  s.forEach(d => localPlayerStats[d.data().name] = d.data().games);
+  renderMainList();
+});
 
-    window.onload = () => { if (isAdmin) document.getElementById("adminPanel").style.display = "block"; }
-  </script>
-</head>
-<body>
+onSnapshot(availabilityRef, s => {
+  currentAvailabilityList = s.docs.map(d => d.data());
+  renderMainList();
+});
 
-<h1>⚽ Disponibilità Calcetto</h1>
+onSnapshot(historyRef, s => renderHistory(s.docs.map(d => d.data())));
 
-<div class="box">
-  <input type="text" id="nameInput" placeholder="Nome (es. MARIO)">
-  <button onclick="setAvailability()">🙋 Segnati</button>
-</div>
+window.onload = () => { if (isAdmin) document.getElementById("adminPanel").style.display = "block"; }
 
-<div class="box">
-  <h3>Lista Attuale</h3>
-  <div id="availableList"></div>
-</div>
-
-<div id="adminPanel" style="display:none; border: 2px dashed #ccc;">
-  <div class="box" style="background: #fff8e1;">
-    <h3>🔐 Pannello Admin</h3>
-    <button onclick="generateTeam()">🔥 Genera Squadra (Top 10)</button>
-    <button onclick="resetAvailability()" class="danger">🗑️ Svuota Lista</button>
-    <div id="selectedList" style="margin-top:15px; text-align:left;"></div>
-    <hr>
-    <h3>Storico Ultime Partite</h3>
-    <div id="historyList"></div>
-  </div>
-</div>
-
-</body>
-</html>
+</script>
