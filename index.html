@@ -1,9 +1,9 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp, writeBatch } 
+import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp, writeBatch, limit } 
 from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIGURAZIONE FIREBASE ---
+// --- CONFIG FIREBASE ---
 const firebaseConfig = {
   apiKey: "INSERISCI_API_KEY",
   authDomain: "INSERISCI_AUTH_DOMAIN",
@@ -19,8 +19,8 @@ const availabilityRef = collection(db, "availability");
 const historyRef = collection(db, "history");
 const playersRef = collection(db, "players");
 
-let localPlayerStats = {}; 
-let currentAvailabilityList = []; 
+let localPlayerStats = {};
+let currentAvailabilityList = [];
 let selectedNames = [];
 
 const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
@@ -34,11 +34,11 @@ window.setAvailability = async function() {
   try {
     const playerQuery = query(playersRef, where("name", "==", name));
     const playerSnap = await getDocs(playerQuery);
-    if (playerSnap.empty) { await addDoc(playersRef, { name: name, games: 0 }); }
+    if (playerSnap.empty) await addDoc(playersRef, { name: name, games: 0 });
 
     const availQuery = query(availabilityRef, where("name", "==", name));
     const availSnap = await getDocs(availQuery);
-    if (!availSnap.empty) { alert("Sei già in lista!"); return; }
+    if (!availSnap.empty) return alert("Sei già in lista!");
 
     await addDoc(availabilityRef, { name: name, timestamp: Timestamp.now() });
     nameInput.value = "";
@@ -51,41 +51,46 @@ window.generateTeam = async function() {
   if (!confirm("Generare i convocati? La lista disponibilità verrà svuotata.")) return;
 
   try {
-    const q = query(availabilityRef, orderBy("timestamp", "asc"));
-    const snapshot = await getDocs(q);
-    
-    if (snapshot.empty) return alert("Nessuno in lista!");
+    // Query che ordina per timestamp e limita a 10
+    const qTop10 = query(availabilityRef, orderBy("timestamp"), limit(10));
+    const topSnapshot = await getDocs(qTop10);
+
+    if (topSnapshot.empty) return alert("Nessuno in lista!");
 
     const batch = writeBatch(db);
-    const allDocs = snapshot.docs;
-    const topDocs = allDocs.slice(0, 10); 
     selectedNames = [];
 
-    // Aggiorna contatore partite dei convocati
-    for (const d of topDocs) {
+    topSnapshot.docs.forEach(d => {
       const name = d.data().name;
       selectedNames.push(name);
+    });
 
+    // Incrementa contatore partite per ciascun convocato
+    for (const name of selectedNames) {
       const pQuery = query(playersRef, where("name", "==", name));
       const pSnap = await getDocs(pQuery);
       if (!pSnap.empty) {
         const pDoc = pSnap.docs[0];
-        const newCount = (pDoc.data().games || 0) + 1;
-        batch.update(doc(db, "players", pDoc.id), { games: newCount });
+        batch.update(doc(db, "players", pDoc.id), { games: (pDoc.data().games || 0) + 1 });
       }
     }
 
     // Cancella tutta la disponibilità
-    allDocs.forEach(d => batch.delete(doc(db, "availability", d.id)));
+    const fullSnap = await getDocs(availabilityRef);
+    fullSnap.docs.forEach(d => batch.delete(doc(db, "availability", d.id)));
+
     await batch.commit();
 
-    // Salva lo storico
-    await addDoc(historyRef, { date: Timestamp.now(), players: selectedNames });
+    // Salva storico
+    await addDoc(historyRef, {
+      date: Timestamp.now(),
+      players: selectedNames
+    });
 
-    alert("Squadra generata e storico aggiornato!");
+    alert("Squadra generata!");
   } catch (e) {
-    console.error("Errore generazione:", e);
-    alert("Errore durante la generazione. Controlla la console.");
+    console.error(e);
+    alert("Errore generazione squadra");
   }
 }
 
@@ -99,7 +104,7 @@ window.resetAvailability = async function() {
   selectedNames = [];
 }
 
-// --- RENDERING ---
+// --- RENDER LISTE ---
 function renderMainList() {
   const list = document.getElementById("availableList");
   list.innerHTML = currentAvailabilityList.length ? "" : "<p>In attesa di giocatori...</p>";
@@ -109,11 +114,8 @@ function renderMainList() {
     .forEach((p, i) => {
       const div = document.createElement("div");
       div.className = 'player available';
-      div.style.borderLeftColor = i < 10 ? "#4CAF50" : "#FF9800";
-
-      // Evidenzia se convocato
       if (selectedNames.includes(p.name)) div.classList.add("selected");
-
+      div.style.borderLeftColor = i < 10 ? "#4CAF50" : "#FF9800";
       const count = localPlayerStats[p.name] || 0;
       div.innerHTML = `<strong>${i+1}. ${p.name}</strong> <span class="badge">Partite: ${count}</span>`;
       list.appendChild(div);
@@ -128,13 +130,13 @@ function renderHistory(data) {
     .forEach(h => {
       const div = document.createElement("div");
       div.className = "history-item";
-      const d = h.date?.toDate ? h.date.toDate().toLocaleString('it-IT') : "Data N/A";
+      const d = h.date.toDate().toLocaleString('it-IT');
       div.innerHTML = `<span class="history-date">📅 ${d}</span><span class="history-names">${h.players.join(", ")}</span>`;
       list.appendChild(div);
     });
 }
 
-// --- SNAPSHOTS ---
+// --- SNAPSHOT LISTENERS ---
 onSnapshot(playersRef, s => {
   s.forEach(d => localPlayerStats[d.data().name] = d.data().games);
   renderMainList();
@@ -148,5 +150,4 @@ onSnapshot(availabilityRef, s => {
 onSnapshot(historyRef, s => renderHistory(s.docs.map(d => d.data())));
 
 window.onload = () => { if (isAdmin) document.getElementById("adminPanel").style.display = "block"; }
-
 </script>
