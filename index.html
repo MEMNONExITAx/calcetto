@@ -18,6 +18,7 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
     const availabilityRef = collection(db, "availability");
+    const historyRef = collection(db, "history");
 
     const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
 
@@ -49,23 +50,56 @@
       const selectedDiv = document.getElementById("selectedList");
       selectedDiv.innerHTML = "";
 
+      const selectedNames = [];
       docs.forEach(d => {
         const div = document.createElement("div");
         div.className = "player selected";
         div.innerText = d.data().name;
         selectedDiv.appendChild(div);
+        selectedNames.push(d.data().name);
       });
+
+      // Aggiungi a storico
+      await addDoc(historyRef, {
+        date: new Date(),
+        players: selectedNames
+      });
+
+      // Rimuovi tutti i documenti della disponibilità (reset totale)
+      const allSnapshot = await getDocs(availabilityRef);
+      for (const d of allSnapshot.docs) {
+        await deleteDoc(doc(db, "availability", d.id));
+      }
     }
 
     window.resetAll = async function() {
-      if (!confirm("Cancellare tutte le disponibilità?")) return;
-      const snapshot = await getDocs(availabilityRef);
-      for (const d of snapshot.docs) {
+      if (!confirm("Cancellare tutte le disponibilità e convocate?")) return;
+      // Cancella disponibilità
+      const availSnapshot = await getDocs(availabilityRef);
+      for (const d of availSnapshot.docs) {
         await deleteDoc(doc(db, "availability", d.id));
       }
+      // Cancella storico
+      const historySnapshot = await getDocs(historyRef);
+      for (const d of historySnapshot.docs) {
+        await deleteDoc(doc(db, "history", d.id));
+      }
       document.getElementById("selectedList").innerHTML = "";
+      renderHistory([]);
     }
 
+    function renderHistory(historyData) {
+      const list = document.getElementById("historyList");
+      list.innerHTML = "";
+      historyData.forEach(h => {
+        const div = document.createElement("div");
+        const date = h.date.toDate().toLocaleString();
+        div.innerText = `${date} → ${h.players.join(', ')}`;
+        list.appendChild(div);
+      });
+    }
+
+    // Mostra disponibilità in tempo reale
     onSnapshot(availabilityRef, (snapshot) => {
       const list = document.getElementById("availableList");
       list.innerHTML = "";
@@ -75,6 +109,12 @@
         div.innerText = d.data().name;
         list.appendChild(div);
       });
+    });
+
+    // Mostra storico in tempo reale
+    onSnapshot(historyRef, (snapshot) => {
+      const historyData = snapshot.docs.map(d => ({ date: d.data().date, players: d.data().players }));
+      renderHistory(historyData);
     });
 
     window.onload = function() {
@@ -110,8 +150,10 @@
   <div class="box">
     <h3>🔐 Pannello Admin</h3>
     <button onclick="generateTeam()">Genera 10 Convocati</button>
-    <button onclick="resetAll()">Reset Disponibilità</button>
+    <button onclick="resetAll()">Reset Totale</button>
     <div id="selectedList" style="margin-top:15px;"></div>
+    <h3>Storico Convocati</h3>
+    <div id="historyList"></div>
   </div>
 </div>
 
