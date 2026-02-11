@@ -16,8 +16,9 @@
     button:hover { background-color: #34495e; }
     button.danger { background-color: #e74c3c; }
     .badge { background: #eee; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; color: #555; }
-    .history-item { text-align: left; border-bottom: 1px solid #eee; padding: 8px 0; font-size: 0.9em; }
-    .history-date { font-weight: bold; color: #2196F3; font-size: 0.8em; display: block; margin-bottom: 4px;}
+    .history-item { text-align: left; border-bottom: 1px solid #eee; padding: 10px 0; font-size: 0.9em; }
+    .history-date { font-weight: bold; color: #2196F3; display: block; margin-bottom: 4px;}
+    .history-names { color: #555; font-style: italic; }
   </style>
 
   <script type="module">
@@ -25,7 +26,7 @@
     import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, orderBy, updateDoc, Timestamp } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-    // --- CONFIGURAZIONE FIREBASE ---
+    // --- CONFIGURAZIONE FIREBASE (INSERISCI I TUOI DATI QUI) ---
     const firebaseConfig = {
       apiKey: "INSERISCI_API_KEY",
       authDomain: "INSERISCI_AUTH_DOMAIN",
@@ -41,35 +42,33 @@
     const historyRef = collection(db, "history");
     const playersRef = collection(db, "players");
 
-    // Stato locale per combinare i dati
-    let localPlayerStats = {}; // Mappa nome -> partite giocate
-    let currentAvailabilityList = []; // Lista di chi ha dato disponibilità
+    let localPlayerStats = {}; 
+    let currentAvailabilityList = []; 
 
     const isAdmin = new URLSearchParams(window.location.search).get("admin") === "1234";
 
-    // --- FUNZIONI GLOBALI (Window) ---
-
+    // --- FUNZIONE PER DARE DISPONIBILITÀ ---
     window.setAvailability = async function() {
       const nameInput = document.getElementById("nameInput");
-      const name = nameInput.value.trim().toUpperCase(); // Normalizziamo i nomi in maiuscolo
-      if (!name) return alert("Inserisci un nome valid!");
+      const rawName = nameInput.value.trim();
+      
+      if (!rawName) return alert("Inserisci un nome valido!");
+      const name = rawName.toUpperCase(); // Forza maiuscolo per evitare duplicati (Mario vs mario)
 
       try {
-        // 1. Controlla/Crea Giocatore nel database statistiche
+        // 1. Crea il giocatore nelle statistiche se non esiste (senza bloccare)
         const playerQuery = query(playersRef, where("name", "==", name));
         const playerSnap = await getDocs(playerQuery);
-        
         if (playerSnap.empty) {
           await addDoc(playersRef, { name: name, games: 0 });
-          console.log("Nuovo giocatore registrato:", name);
         }
 
-        // 2. Controlla se ha già dato disponibilità
+        // 2. Controlla se è già in lista per questa partita
         const availQuery = query(availabilityRef, where("name", "==", name));
         const availSnap = await getDocs(availQuery);
 
         if (!availSnap.empty) {
-          alert("Hai già dato la disponibilità per questa partita!");
+          alert("Sei già in lista!");
           nameInput.value = "";
           return;
         }
@@ -85,15 +84,16 @@
 
       } catch (error) {
         console.error("Errore:", error);
-        alert("Errore durante l'inserimento: " + error.message);
+        alert("Errore: " + error.message);
       }
     }
 
+    // --- FUNZIONE GENERAZIONE SQUADRA (RISCRITTA E PIÙ SICURA) ---
     window.generateTeam = async function() {
       if (!confirm("Confermi di voler generare la squadra e chiudere le iscrizioni?")) return;
 
       try {
-        // Prendi i primi 10 in ordine cronologico
+        // 1. Recupera tutti i disponibili in ordine di tempo
         const q = query(availabilityRef, orderBy("timestamp"));
         const snapshot = await getDocs(q);
         
@@ -103,181 +103,45 @@
         }
 
         const allDocs = snapshot.docs;
-        const selectedDocs = allDocs.slice(0, 10); // Primi 10
-        const selectedNames = [];
+        // Prendi i primi 10 (o meno se non ce ne sono 10)
+        const selectedDocs = allDocs.slice(0, 10); 
+        
+        // Estrai SUBITO i nomi in un array semplice (evita crash nei loop successivi)
+        const selectedNames = selectedDocs.map(doc => doc.data().name);
 
-        const selectedDiv = document.getElementById("selectedList");
-        selectedDiv.innerHTML = "<h4>Convocati:</h4>";
+        console.log("Convocati:", selectedNames); // Debug console
 
-        // Aggiorna contatore partite per i convocati
-        for (const d of selectedDocs) {
-            const name = d.data().name;
-            selectedNames.push(name);
-            
-            // UI Update immediato
-            const div = document.createElement("div");
-            div.className = "player selected";
-            div.innerText = name;
-            selectedDiv.appendChild(div);
-
-            // Aggiorna DB stats
-            const pQuery = query(playersRef, where("name", "==", name));
-            const pSnap = await getDocs(pQuery);
-            if (!pSnap.empty) {
-                const pDoc = pSnap.docs[0];
-                const currentGames = pDoc.data().games || 0;
-                await updateDoc(doc(db, "players", pDoc.id), { games: currentGames + 1 });
-            }
-        }
-
-        // Salva storico
+        // 2. Salva PRIMA lo storico (così non perdiamo i dati se succede un errore dopo)
         await addDoc(historyRef, { 
             date: Timestamp.now(), 
             players: selectedNames 
         });
 
-        // Pulisci disponibilità (rimuovi TUTTI quelli che si erano segnati, anche gli esclusi)
-        // Se vuoi mantenere gli esclusi per la prossima volta, cambia logica qui.
+        // 3. Aggiorna UI Admin
+        const selectedDiv = document.getElementById("selectedList");
+        selectedDiv.innerHTML = "<h4>Convocati Generati:</h4>";
+        selectedNames.forEach(name => {
+            const div = document.createElement("div");
+            div.className = "player selected";
+            div.innerText = name;
+            selectedDiv.appendChild(div);
+        });
+
+        // 4. Aggiorna statistiche partite (try-catch per ogni giocatore per non bloccare tutto)
+        for (const name of selectedNames) {
+            try {
+                const pQuery = query(playersRef, where("name", "==", name));
+                const pSnap = await getDocs(pQuery);
+                if (!pSnap.empty) {
+                    const pDoc = pSnap.docs[0];
+                    const currentGames = pDoc.data().games || 0;
+                    await updateDoc(doc(db, "players", pDoc.id), { games: currentGames + 1 });
+                }
+            } catch (e) {
+                console.error(`Errore aggiornamento stats per ${name}:`, e);
+            }
+        }
+
+        // 5. Pulizia: Rimuovi TUTTE le disponibilità (sia convocati che esclusi)
         for (const d of allDocs) {
             await deleteDoc(doc(db, "availability", d.id));
-        }
-
-        alert("Squadra generata e storico salvato!");
-
-      } catch (e) {
-        console.error(e);
-        alert("Errore generazione: " + e.message);
-      }
-    }
-
-    window.resetAvailability = async function() {
-      if (!confirm("Cancellare TUTTE le disponibilità correnti?")) return;
-      const snapshot = await getDocs(availabilityRef);
-      snapshot.forEach(async (d) => {
-        await deleteDoc(doc(db, "availability", d.id));
-      });
-      document.getElementById("selectedList").innerHTML = "";
-    }
-
-    // --- FUNZIONI DI RENDERING ---
-
-    // Questa funzione unisce i dati: Lista disponibilità + Statistiche giocatore
-    function renderMainList() {
-        const list = document.getElementById("availableList");
-        list.innerHTML = "";
-        
-        if (currentAvailabilityList.length === 0) {
-            list.innerHTML = "<p style='color:#777'>Nessuno ancora disponibile...</p>";
-            return;
-        }
-
-        // Ordiniamo per chi si è iscritto prima
-        currentAvailabilityList.sort((a, b) => a.timestamp - b.timestamp);
-
-        currentAvailabilityList.forEach((p, index) => {
-            const div = document.createElement("div");
-            div.className = 'player available';
-            
-            // Recupera le partite giocate dalla memoria locale
-            const gamesCount = localPlayerStats[p.name] || 0;
-            
-            // Logica: i primi 10 sono verdi scuro, gli altri riserve (opzionale visivamente)
-            const statusColor = index < 10 ? "#4CAF50" : "#FF9800"; 
-            div.style.borderLeftColor = statusColor;
-
-            div.innerHTML = `
-                <strong>${index + 1}. ${p.name}</strong> 
-                <span class="badge">Partite: ${gamesCount}</span>
-            `;
-            list.appendChild(div);
-        });
-    }
-
-    function renderHistory(historyData) {
-      const list = document.getElementById("historyList");
-      list.innerHTML = "";
-      // Ordina dal più recente
-      historyData.sort((a,b) => b.date - a.date); 
-
-      historyData.forEach(h => {
-        const div = document.createElement("div");
-        div.className = "history-item";
-        
-        let dateStr = "Data sconosciuta";
-        if (h.date && h.date.toDate) {
-            dateStr = h.date.toDate().toLocaleDateString('it-IT', { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' });
-        }
-
-        div.innerHTML = `
-            <span class="history-date">📅 ${dateStr}</span>
-            <span>${h.players.join(', ')}</span>
-        `;
-        list.appendChild(div);
-      });
-    }
-
-    // --- LISTENERS REAL-TIME ---
-
-    // 1. Ascolta i dati dei giocatori (per le statistiche)
-    onSnapshot(playersRef, (snapshot) => {
-      localPlayerStats = {}; // Reset cache
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        localPlayerStats[d.name] = d.games;
-      });
-      // Ridisegna la lista se abbiamo aggiornamenti sulle stats
-      renderMainList();
-    });
-
-    // 2. Ascolta la lista delle disponibilità
-    onSnapshot(availabilityRef, (snapshot) => {
-      currentAvailabilityList = snapshot.docs.map(d => d.data());
-      renderMainList();
-    });
-
-    // 3. Ascolta lo storico
-    onSnapshot(historyRef, (snapshot) => {
-      const historyData = snapshot.docs.map(d => d.data());
-      renderHistory(historyData);
-    });
-
-    // --- INIT ---
-    window.onload = function() {
-      if (isAdmin) {
-        document.getElementById("adminPanel").style.display = "block";
-      }
-    }
-  </script>
-</head>
-<body>
-
-<h1>⚽ Disponibilità Calcetto</h1>
-
-<div class="box">
-  <input type="text" id="nameInput" placeholder="Il tuo nome (es. MARIO)">
-  <button onclick="setAvailability()">🙋 Ci sono!</button>
-</div>
-
-<div class="box">
-  <h3>Lista Disponibili</h3>
-  <div id="availableList"></div>
-</div>
-
-<div id="adminPanel" style="display:none; border: 2px dashed #ccc;">
-  <div class="box" style="background: #fff8e1;">
-    <h3>🔐 Pannello Admin</h3>
-    <p><small>Genera la squadra definitiva e aggiorna le presenze.</small></p>
-    
-    <button onclick="generateTeam()">✅ Genera Squadra & Salva</button>
-    <button onclick="resetAvailability()" class="danger">🗑️ Reset Tutto</button>
-    
-    <div id="selectedList" style="margin-top:15px; text-align:left;"></div>
-    
-    <hr>
-    <h3>Storico Partite</h3>
-    <div id="historyList"></div>
-  </div>
-</div>
-
-</body>
-</html>
